@@ -7,6 +7,9 @@ using System.Net.Http;
 using System;
 using System.Linq;
 using System.Collections.Generic;
+using System.IO;
+using System.Text;
+using System.Threading.Tasks;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -28,9 +31,93 @@ if (app.Environment.IsDevelopment())
 
 app.UseRouting();
 
+app.Use(async (context, next) =>
+{
+    var originalBodyStream = context.Response.Body;
+    using (var responseBody = new MemoryStream())
+    {
+        context.Response.Body = responseBody;
+        await next();
+
+        if (context.Response.ContentType != null && context.Response.ContentType.Contains("text/html"))
+        {
+            context.Response.Body.Seek(0, SeekOrigin.Begin);
+            var originalHtml = await new StreamReader(context.Response.Body).ReadToEndAsync();
+            context.Response.Body.Seek(0, SeekOrigin.Begin);
+
+            var script = @"
+            <script>
+                // Override XMLHttpRequest, Fetch, and WebSocket methods
+                function overrideRequests(dotnetHost, originalScheme, originalDomainPort) {
+                    const originalXHROpen = XMLHttpRequest.prototype.open;
+                    const originalFetch = window.fetch;
+                    const originalWebSocket = window.WebSocket;
+
+                    XMLHttpRequest.prototype.open = function(method, url, ...rest) {
+                        url = transformURL(url, dotnetHost, originalScheme, originalDomainPort);
+                        return originalXHROpen.apply(this, [method, url, ...rest]);
+                    };
+
+                    window.fetch = function(input, init) {
+                        if (typeof input === 'string') {
+                            input = transformURL(input, dotnetHost, originalScheme, originalDomainPort);
+                        } else if (input instanceof Request) {
+                            input = new Request(transformURL(input.url, dotnetHost, originalScheme, originalDomainPort), init || input);
+                        }
+                        return originalFetch(input, init);
+                    };
+
+                    window.WebSocket = function(url, protocols) {
+                        url = transformURL(url, dotnetHost.replace(/^http/, 'ws'), originalScheme, originalDomainPort);
+                        return new originalWebSocket(url, protocols);
+                    };
+                }
+
+                // Transform the URL according to the base URL logic
+                function transformURL(url, dotnetHost, originalScheme, originalDomainPort) {
+                    if (url.startsWith('http') || url.startsWith('https') || url.startsWith('ws') || url.startsWith('wss')) {
+                        // Absolute URL with scheme, make it proxyable
+                        const urlObj = new URL(url);
+                        return `${dotnetHost}/${urlObj.protocol.replace(':', '')}/${urlObj.host}${urlObj.pathname}${urlObj.search}`;
+                    } else if (url.startsWith('/')) {
+                        // Root-relative URL, modify to match the proxied base URL root
+                        return `${dotnetHost}/${originalScheme}/${originalDomainPort}${url}`;
+                    }
+                    // Relative URL, leave as is
+                    return url;
+                }
+
+                // Set the base URL and override request methods
+                const dotnetHost = window.location.origin;
+                const originalURL = new URL(window.location.href);
+                const originalScheme = originalURL.protocol.replace(':', '');
+                const originalDomainPort = originalURL.host;
+                overrideRequests(dotnetHost, originalScheme, originalDomainPort);
+            </script>";
+
+            string modifiedHtml;
+            if (originalHtml.Contains("</head>"))
+            {
+                modifiedHtml = originalHtml.Replace("</head>", script + "</head>");
+            }
+            else
+            {
+                modifiedHtml = originalHtml.Replace("<html>", "<html><head>" + script + "</head>");
+            }
+
+            var responseBytes = Encoding.UTF8.GetBytes(modifiedHtml);
+            context.Response.Body.SetLength(0);
+            await context.Response.Body.WriteAsync(responseBytes, 0, responseBytes.Length);
+        }
+
+        context.Response.Body.Seek(0, SeekOrigin.Begin);
+        await context.Response.Body.CopyToAsync(originalBodyStream);
+    }
+});
+
 app.UseEndpoints(endpoints =>
 {
-    endpoints.Map("{**path}", async context =>
+    _ = endpoints.Map("{**path}", async context =>
     {
         var clientFactory = context.RequestServices.GetRequiredService<IHttpClientFactory>();
         var client = clientFactory.CreateClient("insecure");
