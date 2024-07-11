@@ -241,6 +241,32 @@ app.UseEndpoints(endpoints =>
             // Set a permissive version of "X-Permitted-Cross-Domain-Policies" header
             context.Response.Headers["X-Permitted-Cross-Domain-Policies"] = "all";
 
+            // Handle cookies
+            if (context.Response.Headers.ContainsKey("Set-Cookie"))
+            {
+                var cookies = context.Response.Headers["Set-Cookie"].ToList();
+                context.Response.Headers.Remove("Set-Cookie");
+                foreach (var cookie in cookies)
+                {
+                    var modifiedCookie = cookie;
+
+                    // Set cookie to short-lived
+                    if (!modifiedCookie.Contains("Max-Age"))
+                    {
+                        modifiedCookie += "; Max-Age=5";
+                    }
+
+                    // Change domain to dotnet host
+                    var domainSegment = modifiedCookie.Split(';').FirstOrDefault(segment => segment.Trim().StartsWith("Domain=", StringComparison.OrdinalIgnoreCase));
+                    if (domainSegment != null)
+                    {
+                        modifiedCookie = modifiedCookie.Replace(domainSegment, $"Domain={context.Request.Host.Host}");
+                    }
+
+                    context.Response.Headers.Append("Set-Cookie", modifiedCookie);
+                }
+            }
+
             context.Response.Headers.Remove("transfer-encoding");
 
             await responseMessage.Content.CopyToAsync(context.Response.Body);
