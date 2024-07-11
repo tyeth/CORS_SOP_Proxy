@@ -96,9 +96,9 @@ app.Use(async (context, next) =>
             </script>";
 
             string modifiedHtml;
-            if (originalHtml.Contains("</head>"))
+            if (originalHtml.Contains("<head>"))
             {
-                modifiedHtml = originalHtml.Replace("</head>", script + "</head>");
+                modifiedHtml = originalHtml.Replace("<head>", "<head>" + script);
             }
             else
             {
