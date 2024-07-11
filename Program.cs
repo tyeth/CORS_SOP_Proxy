@@ -106,6 +106,7 @@ app.Use(async (context, next) =>
             }
 
             var responseBytes = Encoding.UTF8.GetBytes(modifiedHtml);
+            context.Response.ContentLength = responseBytes.Length;
             context.Response.Body.SetLength(0);
             await context.Response.Body.WriteAsync(responseBytes, 0, responseBytes.Length);
         }
@@ -236,6 +237,9 @@ app.UseEndpoints(endpoints =>
 
             // Remove the X-Frame-Options header
             context.Response.Headers.Remove("X-Frame-Options");
+
+            // Set a permissive version of "X-Permitted-Cross-Domain-Policies" header
+            context.Response.Headers["X-Permitted-Cross-Domain-Policies"] = "all";
 
             context.Response.Headers.Remove("transfer-encoding");
 
